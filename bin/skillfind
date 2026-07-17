@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # skillfind — full-text search over the skills catalog (~/skills-catalog.db)
 # Usage:
 #   skillfind <query>          FTS search (name/description/category)
@@ -19,7 +19,8 @@ rows=[]
 for p in glob.glob(os.path.join(root,"**/SKILL.md"),recursive=True):
     try: t=open(p,encoding="utf-8").read()
     except Exception: continue
-    m=re.search(r'(?s)^---\s*\n(.*?)\n---',t); fm=m.group(1) if m else ""
+    # Optimize frontmatter search with re.match to avoid scanning/backtracking on large files
+    m=re.match(r'(?s)^---\s*\n(.*?)\n---',t); fm=m.group(1) if m else ""
     n=d=None
     if Y and fm:
         try:
@@ -34,8 +35,13 @@ for p in glob.glob(os.path.join(root,"**/SKILL.md"),recursive=True):
     rows.append((c,n,d,p))
 if os.path.exists(db): os.remove(db)
 con=sqlite3.connect(db); cur=con.cursor()
+# Apply transactional PRAGMAs to accelerate bulk insertion/database rebuild
+cur.execute("PRAGMA synchronous = OFF")
+cur.execute("PRAGMA journal_mode = MEMORY")
 cur.execute("CREATE TABLE skills(category TEXT,name TEXT,description TEXT,path TEXT)")
 cur.executemany("INSERT INTO skills VALUES(?,?,?,?)",rows)
+# Add compound index for O(log N) category lookup/index-only scanning (extremely fast -c and -l)
+cur.execute("CREATE INDEX idx_skills_category_name ON skills(category, name)")
 cur.execute("CREATE VIRTUAL TABLE skills_fts USING fts5(name,description,category)")
 cur.execute("INSERT INTO skills_fts(name,description,category) SELECT name,description,category FROM skills")
 con.commit(); con.close()
@@ -47,15 +53,27 @@ if [[ $# -eq 0 ]]; then
   echo "Usage: skillfind <query> | -c <category> | -l | -r"; exit 1
 fi
 
+# Locate a fully capable sqlite3 binary (prefer default PATH, but fallback if it lacks FTS5 support)
+SQLITE_CMD=""
+for cmd in sqlite3 /usr/bin/sqlite3 /usr/local/bin/sqlite3; do
+  if command -v "$cmd" >/dev/null 2>&1 && "$cmd" :memory: "CREATE VIRTUAL TABLE t USING fts5(x);" >/dev/null 2>&1; then
+    SQLITE_CMD="$cmd"
+    break
+  fi
+done
+if [[ -z "$SQLITE_CMD" ]]; then
+  SQLITE_CMD="sqlite3"
+fi
+
 if [[ "$1" != "-r" && ! -f "$DB" ]]; then
   echo "Catalog $DB missing — building it ..." >&2; rebuild
 fi
 
 case "$1" in
   -r) rebuild ;;
-  -l) sqlite3 -box "$DB" "SELECT category,COUNT(*) AS n FROM skills GROUP BY category ORDER BY n DESC,category" ;;
+  -l) "$SQLITE_CMD" -box "$DB" "SELECT category,COUNT(*) AS n FROM skills GROUP BY category ORDER BY n DESC,category" ;;
   -c) [[ $# -ge 2 ]] || { echo "need category"; exit 1; }
-      sqlite3 -box "$DB" "SELECT name,description FROM skills WHERE category=='$2' ORDER BY name" ;;
+      "$SQLITE_CMD" -box "$DB" "SELECT name,description FROM skills WHERE category=='$2' ORDER BY name" ;;
   *)  q="$*"
-      sqlite3 -box "$DB" "SELECT category,name,substr(description,1,80) AS description FROM skills_fts WHERE skills_fts MATCH '$q' LIMIT 40" ;;
+      "$SQLITE_CMD" -box "$DB" "SELECT category,name,substr(description,1,80) AS description FROM skills_fts WHERE skills_fts MATCH '$q' LIMIT 40" ;;
 esac
