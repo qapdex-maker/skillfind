@@ -1,10 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# skillfind — Volltextsuche im Skills-Katalog (~/skills-catalog.db)
+# skillfind — full-text search over the skills catalog (~/skills-catalog.db)
 # Usage:
-#   skillfind <query>          FTS-Suche (name/description/category)
-#   skillfind -c <category>    alle Skills einer Kategorie
-#   skillfind -l               alle Kategorien + Anzahl
-#   skillfind -r               Katalog neu bauen (aus ~/.hermes/skills)
+#   skillfind <query>          FTS search (name/description/category)
+#   skillfind -c <category>    all skills in a category
+#   skillfind -l               all categories + counts
+#   skillfind -r               rebuild the catalog (from ~/.hermes/skills)
 set -euo pipefail
 DB="${SKILL_DB:-$HOME/skills-catalog.db}"
 SKILLS_ROOT="${SKILLS_ROOT:-$HOME/.hermes/skills}"
@@ -48,7 +48,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 if [[ "$1" != "-r" && ! -f "$DB" ]]; then
-  echo "Katalog $DB fehlt — baue ihn ..." >&2; rebuild
+  echo "Catalog $DB missing — building it ..." >&2; rebuild
 fi
 
 case "$1" in
