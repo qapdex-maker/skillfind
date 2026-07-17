@@ -1,0 +1,61 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# skillfind — Volltextsuche im Skills-Katalog (~/skills-catalog.db)
+# Usage:
+#   skillfind <query>          FTS-Suche (name/description/category)
+#   skillfind -c <category>    alle Skills einer Kategorie
+#   skillfind -l               alle Kategorien + Anzahl
+#   skillfind -r               Katalog neu bauen (aus ~/.hermes/skills)
+set -euo pipefail
+DB="${SKILL_DB:-$HOME/skills-catalog.db}"
+SKILLS_ROOT="${SKILLS_ROOT:-$HOME/.hermes/skills}"
+
+rebuild() {
+  python3 - "$DB" "$SKILLS_ROOT" <<'PY'
+import os,re,glob,sqlite3,sys
+db,root=sys.argv[1],os.path.expanduser(sys.argv[2])
+try: import yaml; Y=True
+except Exception: Y=False
+rows=[]
+for p in glob.glob(os.path.join(root,"**/SKILL.md"),recursive=True):
+    try: t=open(p,encoding="utf-8").read()
+    except Exception: continue
+    m=re.search(r'(?s)^---\s*\n(.*?)\n---',t); fm=m.group(1) if m else ""
+    n=d=None
+    if Y and fm:
+        try:
+            o=yaml.safe_load(fm) or {}; n=o.get("name"); d=o.get("description")
+        except Exception: pass
+    if not n:
+        mm=re.search(r'(?m)^name:\s*(.+)$',fm); n=mm.group(1).strip().strip('"\'') if mm else os.path.basename(os.path.dirname(p))
+    if not d:
+        mm=re.search(r'(?m)^description:\s*(.+)$',fm); d=mm.group(1).strip().strip('"\'') if mm else ""
+    d=re.sub(r'\s+',' ',str(d)).strip(); n=str(n).strip().strip('"\'')
+    rel=os.path.relpath(os.path.dirname(p),root); c=rel.split(os.sep)[0] if os.sep in rel else "(top)"
+    rows.append((c,n,d,p))
+if os.path.exists(db): os.remove(db)
+con=sqlite3.connect(db); cur=con.cursor()
+cur.execute("CREATE TABLE skills(category TEXT,name TEXT,description TEXT,path TEXT)")
+cur.executemany("INSERT INTO skills VALUES(?,?,?,?)",rows)
+cur.execute("CREATE VIRTUAL TABLE skills_fts USING fts5(name,description,category)")
+cur.execute("INSERT INTO skills_fts(name,description,category) SELECT name,description,category FROM skills")
+con.commit(); con.close()
+print(f"Rebuilt {db}: {len(rows)} skills from {root}")
+PY
+}
+
+if [[ $# -eq 0 ]]; then
+  echo "Usage: skillfind <query> | -c <category> | -l | -r"; exit 1
+fi
+
+if [[ "$1" != "-r" && ! -f "$DB" ]]; then
+  echo "Katalog $DB fehlt — baue ihn ..." >&2; rebuild
+fi
+
+case "$1" in
+  -r) rebuild ;;
+  -l) sqlite3 -box "$DB" "SELECT category,COUNT(*) AS n FROM skills GROUP BY category ORDER BY n DESC,category" ;;
+  -c) [[ $# -ge 2 ]] || { echo "need category"; exit 1; }
+      sqlite3 -box "$DB" "SELECT name,description FROM skills WHERE category=='$2' ORDER BY name" ;;
+  *)  q="$*"
+      sqlite3 -box "$DB" "SELECT category,name,substr(description,1,80) AS description FROM skills_fts WHERE skills_fts MATCH '$q' LIMIT 40" ;;
+esac

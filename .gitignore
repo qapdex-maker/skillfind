@@ -1,0 +1,10 @@
+# Build artifacts
+skills-catalog.db
+skills-catalog.json
+skills-catalog.csv
+skills-catalog.md
+*.db
+
+# Python
+__pycache__/
+*.pyc
